@@ -4,9 +4,10 @@ import { join } from "node:path";
 
 export type MemoryConfig = {
   embedding: {
-    provider: "openai";
+    provider: "openai" | "ollama";
     model?: string;
-    apiKey: string;
+    apiKey?: string;
+    baseUrl?: string;
   };
   dbPath?: string;
   autoCapture?: boolean;
@@ -22,6 +23,8 @@ const DEFAULT_DB_PATH = join(homedir(), ".clawdbot", "memory", "lancedb");
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
+  "all-minilm:33m-l12-v2-fp16": 384, // Added for Ollama model
+  // Add more as needed
 };
 
 function assertAllowedKeys(
@@ -67,18 +70,51 @@ export const memoryConfigSchema = {
     assertAllowedKeys(cfg, ["embedding", "dbPath", "autoCapture", "autoRecall"], "memory config");
 
     const embedding = cfg.embedding as Record<string, unknown> | undefined;
-    if (!embedding || typeof embedding.apiKey !== "string") {
-      throw new Error("embedding.apiKey is required");
+    if (!embedding) {
+      throw new Error("embedding config is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model"], "embedding config");
+    assertAllowedKeys(embedding, ["provider", "model", "apiKey", "baseUrl"], "embedding config");
+
+    const provider = typeof embedding.provider === "string" ? embedding.provider : "openai";
+    if (provider !== "openai" && provider !== "ollama") {
+      throw new Error("Invalid provider: must be 'openai' or 'ollama'");
+    }
 
     const model = resolveEmbeddingModel(embedding);
 
+    let apiKey: string | undefined;
+    if (embedding.apiKey) {
+      if (typeof embedding.apiKey !== "string") {
+        throw new Error("embedding.apiKey must be a string");
+      }
+      apiKey = resolveEnvVars(embedding.apiKey);
+    }
+
+    let baseUrl: string | undefined;
+    if (embedding.baseUrl) {
+      if (typeof embedding.baseUrl !== "string") {
+        throw new Error("embedding.baseUrl must be a string");
+      }
+      baseUrl = embedding.baseUrl;
+    }
+
+    if (provider === "ollama") {
+      if (!baseUrl) {
+        throw new Error("baseUrl is required for ollama provider");
+      }
+      // apiKey is optional for ollama
+    } else { // openai
+      if (!apiKey) {
+        throw new Error("apiKey is required for openai provider");
+      }
+    }
+
     return {
       embedding: {
-        provider: "openai",
+        provider,
         model,
-        apiKey: resolveEnvVars(embedding.apiKey),
+        apiKey,
+        baseUrl,
       },
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture !== false,
@@ -86,16 +122,26 @@ export const memoryConfigSchema = {
     };
   },
   uiHints: {
-    "embedding.apiKey": {
-      label: "OpenAI API Key",
-      sensitive: true,
-      placeholder: "sk-proj-...",
-      help: "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
+    "embedding.provider": {
+      label: "Embedding Provider",
+      placeholder: "openai",
+      help: "Provider for embeddings: 'openai' or 'ollama'"
     },
     "embedding.model": {
       label: "Embedding Model",
       placeholder: DEFAULT_MODEL,
-      help: "OpenAI embedding model to use",
+      help: "Embedding model to use"
+    },
+    "embedding.apiKey": {
+      label: "API Key",
+      sensitive: true,
+      placeholder: "sk-proj-... or ollama",
+      help: "API key for the provider (optional for local ollama)"
+    },
+    "embedding.baseUrl": {
+      label: "Base URL",
+      placeholder: "http://127.0.0.1:11434/v1",
+      help: "Base URL for ollama (required for ollama provider)"
     },
     dbPath: {
       label: "Database Path",
@@ -112,3 +158,4 @@ export const memoryConfigSchema = {
     },
   },
 };
+

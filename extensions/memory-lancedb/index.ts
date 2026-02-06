@@ -2,7 +2,7 @@
  * Moltbot Memory (LanceDB) Plugin
  *
  * Long-term memory with vector search for AI conversations.
- * Uses LanceDB for storage and OpenAI for embeddings.
+ * Uses LanceDB for storage and OpenAI or Ollama for embeddings.
  * Provides seamless auto-recall and auto-capture via lifecycle hooks.
  */
 
@@ -147,10 +147,14 @@ class MemoryDB {
 }
 
 // ============================================================================
-// OpenAI Embeddings
+// Embeddings Provider Interface
 // ============================================================================
 
-class Embeddings {
+interface EmbeddingsProvider {
+  embed(text: string): Promise<number[]>;
+}
+
+class OpenAIEmbeddings implements EmbeddingsProvider {
   private client: OpenAI;
 
   constructor(
@@ -166,6 +170,39 @@ class Embeddings {
       input: text,
     });
     return response.data[0].embedding;
+  }
+}
+
+class OllamaEmbeddings implements EmbeddingsProvider {
+  constructor(
+    private baseUrl: string,
+    private model: string,
+    private apiKey?: string,
+  ) {}
+
+  async embed(text: string): Promise<number[]> {
+    const headers: HeadersInit = {
+      "Content-Type": "application/json",
+    };
+    if (this.apiKey) {
+      headers["Authorization"] = `Bearer ${this.apiKey}`;
+    }
+
+    const response = await fetch(`${this.baseUrl}/api/embeddings`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: this.model,
+        prompt: text,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.embedding;
   }
 }
 
@@ -225,7 +262,23 @@ const memoryPlugin = {
     const resolvedDbPath = api.resolvePath(cfg.dbPath!);
     const vectorDim = vectorDimsForModel(cfg.embedding.model ?? "text-embedding-3-small");
     const db = new MemoryDB(resolvedDbPath, vectorDim);
-    const embeddings = new Embeddings(cfg.embedding.apiKey, cfg.embedding.model!);
+
+    let embeddings: EmbeddingsProvider;
+    if (cfg.embedding.provider === "ollama") {
+      if (!cfg.embedding.baseUrl) {
+        throw new Error("baseUrl required for ollama");
+      }
+      embeddings = new OllamaEmbeddings(
+        cfg.embedding.baseUrl,
+        cfg.embedding.model!,
+        cfg.embedding.apiKey
+      );
+    } else {
+      if (!cfg.embedding.apiKey) {
+        throw new Error("apiKey required for openai");
+      }
+      embeddings = new OpenAIEmbeddings(cfg.embedding.apiKey, cfg.embedding.model!);
+    }
 
     api.logger.info(
       `memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`,
@@ -275,10 +328,8 @@ const memoryPlugin = {
           }));
 
           return {
-            content: [
-              { type: "text", text: `Found ${results.length} memories:\n\n${text}` },
-            ],
-            details: { count: results.length, memories: sanitizedResults },
+            content: [{ type: "text", text }],
+            details: { results: sanitizedResults },
           };
         },
       },
@@ -289,39 +340,25 @@ const memoryPlugin = {
       {
         name: "memory_store",
         label: "Memory Store",
-        description:
-          "Save important information in long-term memory. Use for preferences, facts, decisions.",
+        description: "Store important information in long-term memory",
         parameters: Type.Object({
-          text: Type.String({ description: "Information to remember" }),
-          importance: Type.Optional(
-            Type.Number({ description: "Importance 0-1 (default: 0.7)" }),
-          ),
-          category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+          text: Type.String({ description: "Text to store" }),
+          category: stringEnum(MEMORY_CATEGORIES, { description: "Category" }),
+          importance: Type.Number({
+            description: "Importance (0-1)",
+            default: 0.5,
+            minimum: 0,
+            maximum: 1,
+          }),
         }),
         async execute(_toolCallId, params) {
-          const {
-            text,
-            importance = 0.7,
-            category = "other",
-          } = params as {
+          const { text, category = "other", importance = 0.5 } = params as {
             text: string;
+            category?: MemoryCategory;
             importance?: number;
-            category?: MemoryEntry["category"];
           };
 
           const vector = await embeddings.embed(text);
-
-          // Check for duplicates
-          const existing = await db.search(vector, 1, 0.95);
-          if (existing.length > 0) {
-            return {
-              content: [
-                { type: "text", text: `Similar memory already exists: "${existing[0].entry.text}"` },
-              ],
-              details: { action: "duplicate", existingId: existing[0].entry.id, existingText: existing[0].entry.text },
-            };
-          }
-
           const entry = await db.store({
             text,
             vector,
@@ -588,3 +625,4 @@ const memoryPlugin = {
 };
 
 export default memoryPlugin;
+
