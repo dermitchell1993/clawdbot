@@ -82,6 +82,7 @@ export async function inspectPathPermissions(
   }
 
   const bits = modeBits(st.mode);
+  console.log(`Audit: raw mode for ${targetPath}: 0o${st.mode?.toString(8) ?? 'null'}, masked: 0o${formatOctal(bits)}`);
   const platform = opts?.platform ?? process.platform;
 
   if (platform === "win32") {
