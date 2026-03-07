@@ -292,7 +292,10 @@ export async function uninstallLaunchAgent({
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
-  await execLaunchctl(["bootout", domain, plistPath]);
+  
+  // Bootout the service using domain/label format (not plist path)
+  await execLaunchctl(["bootout", `${domain}/${label}`]);
+  // Legacy unload for older macOS versions
   await execLaunchctl(["unload", plistPath]);
 
   try {
@@ -302,15 +305,12 @@ export async function uninstallLaunchAgent({
     return;
   }
 
-  const home = resolveHomeDir(env);
-  const trashDir = path.join(home, ".Trash");
-  const dest = path.join(trashDir, `${label}.plist`);
+  // Remove the plist file instead of moving to Trash for cleaner uninstall
   try {
-    await fs.mkdir(trashDir, { recursive: true });
-    await fs.rename(plistPath, dest);
-    stdout.write(`${formatLine("Moved LaunchAgent to Trash", dest)}\n`);
+    await fs.unlink(plistPath);
+    stdout.write(`${formatLine("Removed LaunchAgent plist", plistPath)}\n`);
   } catch {
-    stdout.write(`LaunchAgent remains at ${plistPath} (could not move)\n`);
+    stdout.write(`LaunchAgent remains at ${plistPath} (could not remove)\n`);
   }
 }
 
