@@ -263,6 +263,22 @@ export type AgentDefaultsConfig = {
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;
+  /** Model router configuration for intelligent model selection. */
+  modelRouter?: {
+    /** Local model for simple tasks (default: ollama/mistral-nemo). */
+    localModel?: string;
+    /** Cloud model for moderate-complex tasks (default: xai/grok-2-mini). */
+    cloudModel?: string;
+    /** Premium model for very-complex tasks (default: anthropic/claude-opus-4). */
+    premiumModel?: string;
+    /** Complexity thresholds for escalation. */
+    thresholds?: {
+      cloudEscalation?: "simple" | "moderate" | "complex" | "very-complex";
+      premiumEscalation?: "simple" | "moderate" | "complex" | "very-complex";
+    };
+    /** Enable telemetry tracking. */
+    telemetryEnabled?: boolean;
+  };
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
